@@ -3,6 +3,7 @@ from supabase import create_client
 import pandas as pd
 from datetime import datetime
 import math
+import os
 
 # ========== CONFIG ==========
 SUPABASE_URL = os.getenv("SUPABASE_URL")
