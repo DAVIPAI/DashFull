@@ -88,22 +88,13 @@ def fmt_moeda_brl(x):
 
 def fmt_datetime_br(dt_str):
     """
-    Converte para horário de São Paulo (UTC-3) e formata como dd/mm/aaaa HH:MM:SS.
-    Trata tanto strings quanto Timestamp.
-    - Se vier com timezone, converte para America/Sao_Paulo.
-    - Se vier sem timezone, assume que já está em America/Sao_Paulo.
+    Converte timestamp UTC do banco para horário de São Paulo (UTC-3)
+    e formata como dd/mm/aaaa HH:MM:SS.
     """
-    if dt_str is None or dt_str == "":
+    if not dt_str:
         return "-"
     try:
-        ts = pd.to_datetime(dt_str, errors="coerce")
-        if pd.isna(ts):
-            return "-"
-        if ts.tzinfo is None:
-            # assume que já é horário local de São Paulo
-            ts = ts.tz_localize("America/Sao_Paulo")
-        else:
-            ts = ts.tz_convert("America/Sao_Paulo")
+        ts = pd.to_datetime(dt_str, utc=True).tz_convert("America/Sao_Paulo")
         return ts.strftime("%d/%m/%Y %H:%M:%S")
     except Exception:
         return str(dt_str)
@@ -278,7 +269,7 @@ def render_secao_total(
     """
     Card de resumo PBX Total, calculando:
     - soma do mailing
-    - média do ticket médio (apenas valores != 0)
+    - média do ticket médio
     - soma de leads
     - soma de chamadas
     - soma valor consumido
@@ -294,35 +285,29 @@ def render_secao_total(
     total_chamadas  = sum(m["qtde_chamadas"] for m in valid)
     total_valor     = sum(m["valor_consumido"] for m in valid)
 
-    # Só considera ticket_medio diferente de 0
-    tickets = [
-        m["ticket_medio"]
-        for m in valid
-        if m["ticket_medio"] is not None and m["ticket_medio"] != 0
-    ]
+    tickets = [m["ticket_medio"] for m in valid if m["ticket_medio"] is not None]
     ticket_medio_med = sum(tickets) / len(tickets) if tickets else None
 
-    # Último lead mais recente
+    # Último lead mais recente (proteção de parsing)
     ultimos_validos = [m["ultimo_lead"] for m in valid if m["ultimo_lead"]]
     if ultimos_validos:
         ult_series = pd.to_datetime(ultimos_validos, errors="coerce")
         ult_series = ult_series.dropna()
         if len(ult_series) > 0:
             ultimo_global = ult_series.max()
-            ultimo_global_str = fmt_datetime_br(ultimo_global)
+            ultimo_global_str = ultimo_global.strftime("%d/%m/%Y %H:%M:%S")
         else:
             ultimo_global_str = "-"
     else:
         ultimo_global_str = "-"
 
-    # "Atualizado em" com base no created_at mais recente
     created_validos = [m["created_at"] for m in valid if m["created_at"]]
     if created_validos:
         created_series = pd.to_datetime(created_validos, errors="coerce")
         created_series = created_series.dropna()
         if len(created_series) > 0:
             updated_dt = created_series.max()
-            updated_str = fmt_datetime_br(updated_dt)
+            updated_str = updated_dt.strftime("%d/%m/%Y %H:%M:%S")
         else:
             updated_str = "-"
     else:
@@ -514,4 +499,4 @@ with col_fmg:
         bg_color="#f3eaff",   # roxo mais claro
     )
 
-st.caption("Atualização automática a cada 120 segundos (2 minutos).")
+st.caption("Atualização automática a cada 60 segundos.")
