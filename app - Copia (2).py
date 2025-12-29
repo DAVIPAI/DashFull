@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client
 import pandas as pd
+from datetime import datetime
 import math
 import os
 
@@ -24,28 +25,17 @@ st.markdown(
         padding-top: 0.6rem;
         padding-bottom: 0.6rem;
     }
-
     .op-card {
         border-radius: 16px;
         padding: 12px 14px;
         box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
         border: 1px solid rgba(148, 163, 184, 0.2);
-        margin-bottom: 12px;
     }
-
     .op-title {
         font-size: 20px;
         font-weight: 700;
         margin-bottom: 2px;
     }
-
-    /* ✅ Apenas para PBX Total (um pouco maior) */
-    .op-title-total {
-        font-size: 24px;
-        font-weight: 800;
-        margin-bottom: 2px;
-    }
-
     .op-subtitle {
         font-size: 11px;
         color: #6b7280;
@@ -58,20 +48,6 @@ st.markdown(
     }
     .op-updated span {
         font-weight: 600;
-    }
-
-    /* “Quadrantes” (caixas grandes) */
-    .quad {
-        border-radius: 18px;
-        padding: 14px 14px 2px 14px;
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        background: rgba(255,255,255,0.55);
-    }
-    .quad-title {
-        font-size: 14px;
-        font-weight: 800;
-        color: rgba(15, 23, 42, 0.75);
-        margin-bottom: 10px;
     }
     </style>
     """,
@@ -124,12 +100,14 @@ def fmt_datetime_br(dt_str):
         if pd.isna(ts):
             return "-"
         if ts.tzinfo is None:
+            # assume que já é horário local de São Paulo
             ts = ts.tz_localize("America/Sao_Paulo")
         else:
             ts = ts.tz_convert("America/Sao_Paulo")
         return ts.strftime("%d/%m/%Y %H:%M:%S")
     except Exception:
         return str(dt_str)
+
 
 @st.cache_data(ttl=50)
 def carregar_ultima_linha(tabela: str):
@@ -143,6 +121,7 @@ def carregar_ultima_linha(tabela: str):
     )
     dados = resp.data or []
     return dados[0] if len(dados) else None
+
 
 def get_metrics_pbx(tabela: str, sufixo: str):
     """
@@ -186,6 +165,7 @@ def get_metrics_pbx(tabela: str, sufixo: str):
         "created_at": created_at,
     }
 
+
 def render_secao(
     titulo: str,
     subtitulo: str,
@@ -210,23 +190,29 @@ def render_secao(
     m_ult     = fmt_datetime_br(m["ultimo_lead"])
     updated   = fmt_datetime_br(m["created_at"])
 
+    # Card com fundo colorido
     st.markdown(
         f'<div class="op-card" style="background-color:{bg_color};">',
         unsafe_allow_html=True,
     )
 
+    # Cabeçalho: título + atualizado
     col_top1, col_top2 = st.columns([2, 1])
     with col_top1:
         st.markdown(f'<div class="op-title">{titulo}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="op-subtitle">{subtitulo}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="op-subtitle">{subtitulo}</div>',
+            unsafe_allow_html=True,
+        )
     with col_top2:
         st.markdown(
             f'<div class="op-updated">Atualizado em<br><span>{updated}</span></div>',
             unsafe_allow_html=True,
         )
 
-    st.markdown("")
+    st.markdown("")  # espaçinho
 
+    # Linha 1
     linha1 = st.columns(3)
     with linha1[0]:
         st.metric("Status Campanhas", m_status)
@@ -235,12 +221,14 @@ def render_secao(
     with linha1[2]:
         st.metric("Ticket Médio", m_ticket)
 
+    # Linha 2
     linha2 = st.columns(3)
     with linha2[0]:
         st.metric("Leads (Qtde)", m_leads)
     with linha2[1]:
         st.metric("Chamadas (Qtde)", m_calls)
     with linha2[2]:
+        # Valor Consumido customizado
         st.markdown(
             f"""
             <div style="
@@ -258,6 +246,7 @@ def render_secao(
             unsafe_allow_html=True,
         )
 
+    # Linha 3: Último Lead
     linha3 = st.columns(3)
     with linha3[0]:
         st.markdown(
@@ -277,7 +266,8 @@ def render_secao(
             unsafe_allow_html=True,
         )
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)  # fecha card
+
 
 def render_secao_total(
     titulo: str,
@@ -304,6 +294,7 @@ def render_secao_total(
     total_chamadas  = sum(m["qtde_chamadas"] for m in valid)
     total_valor     = sum(m["valor_consumido"] for m in valid)
 
+    # Só considera ticket_medio diferente de 0
     tickets = [
         m["ticket_medio"]
         for m in valid
@@ -311,17 +302,29 @@ def render_secao_total(
     ]
     ticket_medio_med = sum(tickets) / len(tickets) if tickets else None
 
+    # Último lead mais recente
     ultimos_validos = [m["ultimo_lead"] for m in valid if m["ultimo_lead"]]
     if ultimos_validos:
-        ult_series = pd.to_datetime(ultimos_validos, errors="coerce").dropna()
-        ultimo_global_str = fmt_datetime_br(ult_series.max()) if len(ult_series) > 0 else "-"
+        ult_series = pd.to_datetime(ultimos_validos, errors="coerce")
+        ult_series = ult_series.dropna()
+        if len(ult_series) > 0:
+            ultimo_global = ult_series.max()
+            ultimo_global_str = fmt_datetime_br(ultimo_global)
+        else:
+            ultimo_global_str = "-"
     else:
         ultimo_global_str = "-"
 
+    # "Atualizado em" com base no created_at mais recente
     created_validos = [m["created_at"] for m in valid if m["created_at"]]
     if created_validos:
-        created_series = pd.to_datetime(created_validos, errors="coerce").dropna()
-        updated_str = fmt_datetime_br(created_series.max()) if len(created_series) > 0 else "-"
+        created_series = pd.to_datetime(created_validos, errors="coerce")
+        created_series = created_series.dropna()
+        if len(created_series) > 0:
+            updated_dt = created_series.max()
+            updated_str = fmt_datetime_br(updated_dt)
+        else:
+            updated_str = "-"
     else:
         updated_str = "-"
 
@@ -331,6 +334,7 @@ def render_secao_total(
     m_calls   = fmt_int(total_chamadas)
     m_valor   = fmt_moeda_brl(total_valor)
 
+    # Card PBX Total (laranja mais escuro da família)
     st.markdown(
         f'<div class="op-card" style="background-color:{bg_color};">',
         unsafe_allow_html=True,
@@ -338,9 +342,11 @@ def render_secao_total(
 
     col_top1, col_top2 = st.columns([2, 1])
     with col_top1:
-        # ✅ Título maior somente no PBX Total
-        st.markdown(f'<div class="op-title-total">{titulo}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="op-subtitle">{subtitulo}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="op-title">{titulo}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="op-subtitle">{subtitulo}</div>',
+            unsafe_allow_html=True,
+        )
     with col_top2:
         st.markdown(
             f'<div class="op-updated">Atualizado em<br><span>{updated_str}</span></div>',
@@ -349,6 +355,7 @@ def render_secao_total(
 
     st.markdown("")
 
+    # Linha 1
     linha1 = st.columns(3)
     with linha1[0]:
         st.metric("Mailing Total", m_mailing)
@@ -357,6 +364,7 @@ def render_secao_total(
     with linha1[2]:
         st.metric("Leads Totais", m_leads)
 
+    # Linha 2
     linha2 = st.columns(3)
     with linha2[0]:
         st.metric("Chamadas Totais", m_calls)
@@ -399,92 +407,111 @@ def render_secao_total(
 
 
 # ==========================
-# COLETA DAS MÉTRICAS (somente PBX1..PBX3)
+# COLETA DAS MÉTRICAS PBX1..PBX5
 # ==========================
 metrics_pbx1 = get_metrics_pbx("operacao_pbx1", "pbx1")
 metrics_pbx2 = get_metrics_pbx("operacao_pbx2", "pbx2")
 metrics_pbx3 = get_metrics_pbx("operacao_pbx3", "pbx3")
+metrics_pbx4 = get_metrics_pbx("operacao_pbx4", "pbx4")
+metrics_pbx5 = get_metrics_pbx("operacao_pbx5", "pbx5")
 
 # ==========================
-# COLETA DAS MÉTRICAS VIVO
+# LAYOUT: LINHA 1 -> PBX TOTAL, PBX1, PBX2 (laranjas)
 # ==========================
-metrics_soc = get_metrics_pbx("operacao_soc", "soc")
-metrics_rpo = get_metrics_pbx("operacao_rpo", "rpo")
-metrics_fmg = get_metrics_pbx("operacao_fmg", "fmg")
+col_total, col_pbx1, col_pbx2 = st.columns(3)
 
-# ==========================
-# LAYOUT EM 2 QUADRANTES
-# ==========================
-quad_esq, quad_dir = st.columns(2)
-
-# ===== QUADRANTE ESQUERDO (PBX) =====
-with quad_esq:
-    st.markdown('<div class="quad">', unsafe_allow_html=True)
-    st.markdown('<div class="quad-title">QUADRANTE PBX</div>', unsafe_allow_html=True)
-
+with col_total:
     render_secao_total(
         titulo="Operação PBX Total",
-        subtitulo="Resumo consolidado das operações PBX1 a PBX3.",
-        metrics_list=[metrics_pbx1, metrics_pbx2, metrics_pbx3],
-        bg_color="#fed7aa",   # mantém a cor original do PBX Total
+        subtitulo="Resumo consolidado das operações PBX1 a PBX5.",
+        metrics_list=[metrics_pbx1, metrics_pbx2, metrics_pbx3, metrics_pbx4, metrics_pbx5],
+        bg_color="#fed7aa",   # laranja mais escuro dentro do pastel
     )
 
-    # PBX1, PBX2, PBX3 no mesmo quadrante
+with col_pbx1:
     render_secao(
         titulo="Operação PBX1",
         subtitulo="Monitoramento em tempo quase real — PBX1.",
         tabela="operacao_pbx1",
         sufixo="pbx1",
-        bg_color="#ffe0b8",
+        bg_color="#ffe0b8",      # um pouco mais claro
     )
 
+with col_pbx2:
     render_secao(
         titulo="Operação PBX2",
         subtitulo="Indicadores dedicados à operação PBX2.",
         tabela="operacao_pbx2",
         sufixo="pbx2",
-        bg_color="#ffe9c7",
+        bg_color="#ffe9c7",      # mais claro ainda
     )
 
+# ==========================
+# LAYOUT: LINHA 2 -> PBX3, PBX4, PBX5 (laranjas mais claros)
+# ==========================
+col_pbx3, col_pbx4, col_pbx5 = st.columns(3)
+
+with col_pbx3:
     render_secao(
         titulo="Operação PBX3",
         subtitulo="Visão consolidada da operação PBX3.",
         tabela="operacao_pbx3",
         sufixo="pbx3",
-        bg_color="#fff1d7",
+        bg_color="#fff1d7",      # laranja bem claro
     )
 
-    st.markdown("</div>", unsafe_allow_html=True)
+with col_pbx4:
+    render_secao(
+        titulo="Operação PBX4",
+        subtitulo="Indicadores dedicados à operação PBX4.",
+        tabela="operacao_pbx4",
+        sufixo="pbx4",
+        bg_color="#fff7e6",      # quase branco com toque laranja
+    )
 
-# ===== QUADRANTE DIREITO (VIVO) =====
-with quad_dir:
-    st.markdown('<div class="quad">', unsafe_allow_html=True)
-    st.markdown('<div class="quad-title">QUADRANTE VIVO</div>', unsafe_allow_html=True)
+with col_pbx5:
+    render_secao(
+        titulo="Operação PBX5",
+        subtitulo="Indicadores dedicados à operação PBX5.",
+        tabela="operacao_pbx5",
+        sufixo="pbx5",
+        bg_color="#fffaf0",      # o mais clarinho
+    )
 
+# ==========================
+# LAYOUT: LINHA 3 -> VIVO (SOC, RPO, FMG em roxos)
+# ==========================
+metrics_soc = get_metrics_pbx("operacao_soc", "soc")
+metrics_rpo = get_metrics_pbx("operacao_rpo", "rpo")
+metrics_fmg = get_metrics_pbx("operacao_fmg", "fmg")
+
+col_soc, col_rpo, col_fmg = st.columns(3)
+
+with col_soc:
     render_secao(
         titulo="Operação SOC (Vivo)",
         subtitulo="Indicadores da operação Vivo — SOC.",
         tabela="operacao_soc",
         sufixo="soc",
-        bg_color="#e0d4ff",
+        bg_color="#e0d4ff",   # roxo mais escuro (pastel)
     )
 
+with col_rpo:
     render_secao(
         titulo="Operação RPO (Vivo)",
         subtitulo="Indicadores da operação Vivo — RPO.",
         tabela="operacao_rpo",
         sufixo="rpo",
-        bg_color="#e9ddff",
+        bg_color="#e9ddff",   # roxo médio
     )
 
+with col_fmg:
     render_secao(
         titulo="Operação FMG (Vivo)",
         subtitulo="Indicadores da operação Vivo — FMG.",
         tabela="operacao_fmg",
         sufixo="fmg",
-        bg_color="#f3eaff",
+        bg_color="#f3eaff",   # roxo mais claro
     )
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 st.caption("Atualização automática a cada 120 segundos (2 minutos).")
