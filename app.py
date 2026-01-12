@@ -1,3 +1,7 @@
+Você colou no `app.py` com as crases do Markdown (`python). No arquivo **tem que ficar só o código**, sem `.
+
+Abaixo está o **código inteiro limpo** (pode copiar e colar direto no `app.py`):
+
 ```python
 import streamlit as st
 from supabase import create_client
@@ -200,9 +204,6 @@ def render_secao(
     sufixo: str,
     bg_color: str,
 ):
-    """
-    Renderiza uma seção individual (PBX ou Vivo).
-    """
     m = get_metrics_pbx(tabela, sufixo)
     if not m:
         st.info(f"Nenhum dado encontrado na tabela **{tabela}**.")
@@ -291,18 +292,9 @@ def render_secao_total(
     subtitulo: str,
     metrics_list: list,
     bg_color: str,
-    title_class: str = "op-title",         # permite variar o estilo do título
-    metric_wrapper_class: str | None = None,  # permite aumentar números via CSS
+    title_class: str = "op-title",
+    metric_wrapper_class: str | None = None,
 ):
-    """
-    Card consolidado (PBX Total / Vivo Total):
-    - soma do mailing
-    - média do ticket médio (apenas valores != 0)
-    - soma de leads
-    - soma de chamadas
-    - soma valor consumido
-    - último lead mais recente entre todos
-    """
     valid = [m for m in metrics_list if m is not None]
     if not valid:
         st.info(f"Nenhum dado encontrado para compor **{titulo}**.")
@@ -340,7 +332,6 @@ def render_secao_total(
     m_calls   = fmt_int(total_chamadas)
     m_valor   = fmt_moeda_brl(total_valor)
 
-    # wrapper opcional (ex: .pbx-total-metric)
     if metric_wrapper_class:
         st.markdown(f'<div class="{metric_wrapper_class}">', unsafe_allow_html=True)
 
@@ -414,12 +405,12 @@ def render_secao_total(
 
 
 # ==========================
-# COLETA DAS MÉTRICAS PBX (agora PBX1..PBX4)
+# COLETA DAS MÉTRICAS PBX (PBX1..PBX4)
 # ==========================
 metrics_pbx1 = get_metrics_pbx("operacao_pbx1", "pbx1")
 metrics_pbx2 = get_metrics_pbx("operacao_pbx2", "pbx2")
 metrics_pbx3 = get_metrics_pbx("operacao_pbx3", "pbx3")
-metrics_pbx4 = get_metrics_pbx("operacao_pbx4", "pbx4")  # ✅ incluído (mesma autenticação, sufixo pbx4)
+metrics_pbx4 = get_metrics_pbx("operacao_pbx4", "pbx4")
 
 # ==========================
 # COLETA DAS MÉTRICAS VIVO
@@ -427,7 +418,7 @@ metrics_pbx4 = get_metrics_pbx("operacao_pbx4", "pbx4")  # ✅ incluído (mesma 
 metrics_soc = get_metrics_pbx("operacao_soc", "soc")
 metrics_rpo = get_metrics_pbx("operacao_rpo", "rpo")
 metrics_fmg = get_metrics_pbx("operacao_fmg", "fmg")
-metrics_rpa = get_metrics_pbx("operacao_rpa", "rpa")  # ✅ cópia do RPO trocando rpo -> rpa
+metrics_rpa = get_metrics_pbx("operacao_rpa", "rpa")
 
 # ==========================
 # LAYOUT EM 2 QUADRANTES
@@ -439,7 +430,6 @@ with quad_esq:
     st.markdown('<div class="quad">', unsafe_allow_html=True)
     st.markdown('<div class="quad-title">QUADRANTE PBX</div>', unsafe_allow_html=True)
 
-    # ✅ PBX Total agora considera PBX1..PBX4
     render_secao_total(
         titulo="Operação PBX Total",
         subtitulo="Resumo consolidado das operações PBX1 a PBX4.",
@@ -473,7 +463,6 @@ with quad_esq:
         bg_color="#fff1d7",
     )
 
-    # ✅ PBX4 entra no quadrante PBX (mantendo cor que estava no teu código anterior para PBX4)
     render_secao(
         titulo="Operação PBX4",
         subtitulo="Indicadores dedicados à operação PBX4.",
@@ -489,12 +478,11 @@ with quad_dir:
     st.markdown('<div class="quad">', unsafe_allow_html=True)
     st.markdown('<div class="quad-title">QUADRANTE VIVO</div>', unsafe_allow_html=True)
 
-    # ✅ Cartão consolidado SOC+RPO+FMG (idêntico ao PBX Total, mas sem aumentar números)
     render_secao_total(
         titulo="Operação Vivo Total",
         subtitulo="Resumo consolidado das operações SOC, RPO e FMG.",
         metrics_list=[metrics_soc, metrics_rpo, metrics_fmg],
-        bg_color="#ddd6fe",  # tom roxo claro/pastel dentro da família (não altera os cards individuais)
+        bg_color="#ddd6fe",
         title_class="op-title-total",
         metric_wrapper_class=None,
     )
@@ -523,16 +511,18 @@ with quad_dir:
         bg_color="#f3eaff",
     )
 
-    # ✅ RPA deve ficar no final do relatório (por isso está por último)
+    # RPA no final
     render_secao(
         titulo="Operação RPA (Vivo)",
         subtitulo="Indicadores da operação Vivo — RPA.",
         tabela="operacao_rpa",
         sufixo="rpa",
-        bg_color="#f3eaff",  # mantém família roxa; se você tiver uma cor específica pro RPA, troque aqui
+        bg_color="#f3eaff",
     )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.caption("Atualização automática a cada 120 segundos (2 minutos).")
 ```
+
+Se ainda der erro, me mande o **nome exato da tabela** e 1 exemplo de **coluna real** do RPA no Supabase (só o nome da coluna, sem dados), pra eu garantir que o sufixo `rpa` bate 100% com o schema.
