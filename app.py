@@ -1,8 +1,4 @@
-Você colou no `app.py` com as crases do Markdown (`python). No arquivo **tem que ficar só o código**, sem `.
 
-Abaixo está o **código inteiro limpo** (pode copiar e colar direto no `app.py`):
-
-```python
 import streamlit as st
 from supabase import create_client
 import pandas as pd
@@ -523,6 +519,4 @@ with quad_dir:
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.caption("Atualização automática a cada 120 segundos (2 minutos).")
-```
 
-Se ainda der erro, me mande o **nome exato da tabela** e 1 exemplo de **coluna real** do RPA no Supabase (só o nome da coluna, sem dados), pra eu garantir que o sufixo `rpa` bate 100% com o schema.
