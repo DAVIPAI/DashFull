@@ -17,10 +17,7 @@ PAGE_TITLE = "📊 Painel Supervisório — Operações PBX & Vivo"
 
 # ✅ Planilha pública com limites (dinâmicos)
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MrG40xIke5idxF-lIu-koeyL2oNyjTXMEtcqK3E2qps/edit?usp=sharing"
-
-# ✅ IMPORTANTE: se você editar outra aba, troque o gid abaixo
-# (gid=0 é a primeira aba)
-GOOGLE_SHEET_GID = os.getenv("GOOGLE_SHEET_GID", "0")
+GOOGLE_SHEET_GID = os.getenv("GOOGLE_SHEET_GID", "0")  # seu caso: gid=0
 
 # ========== CONEXÃO ==========
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -72,11 +69,13 @@ st.markdown(
         color: #6b7280;
         margin-bottom: 6px;
     }
+
     .op-updated {
         font-size: 11px;
         color: #4b5563;
         text-align: right;
     }
+
     .op-updated span {
         font-weight: 600;
     }
@@ -87,6 +86,7 @@ st.markdown(
         border: 1px solid rgba(148, 163, 184, 0.25);
         background: rgba(255,255,255,0.55);
     }
+
     .quad-title {
         font-size: 14px;
         font-weight: 800;
@@ -94,7 +94,7 @@ st.markdown(
         margin-bottom: 10px;
     }
 
-    /* ✅ Caixas customizadas com tamanho visual próximo ao st.metric */
+    /* ✅ Caixas customizadas com tamanho próximo ao st.metric */
     .kv-box {
         border-radius: 10px;
         padding: 8px 10px;
@@ -105,25 +105,29 @@ st.markdown(
         flex-direction: column;
         justify-content: center;
     }
+
     .kv-box.warn {
         background-color: #fef08a !important; /* amarelo */
         border: 1px solid #f59e0b !important;
     }
+
     .kv-label {
         font-size: 0.80rem;
         color: #6b7280;
         line-height: 1.1;
         margin-bottom: 4px;
     }
+
     .kv-value {
-        font-size: 1.45rem;       /* ✅ maior */
+        font-size: 1.45rem;
         font-weight: 700;
         line-height: 1.05;
         word-break: break-word;
         color: rgb(49, 51, 63);
     }
+
     .kv-value-big {
-        font-size: 1.45rem;       /* ✅ igual ao kv-value para ficar padrão */
+        font-size: 1.45rem;
         font-weight: 700;
         line-height: 1.05;
         word-break: break-word;
@@ -254,9 +258,6 @@ def build_gsheet_csv_url(sheet_url: str, gid: str = "0", force_ts: bool = True) 
     return url
 
 def carregar_csv_google_sem_cache(csv_url: str) -> pd.DataFrame:
-    """
-    Faz download explícito com headers anti-cache (mais confiável que pd.read_csv direto na URL).
-    """
     headers = {
         "Cache-Control": "no-cache, no-store, max-age=0",
         "Pragma": "no-cache",
@@ -266,11 +267,8 @@ def carregar_csv_google_sem_cache(csv_url: str) -> pd.DataFrame:
     resp = requests.get(csv_url, headers=headers, timeout=15)
     resp.raise_for_status()
     text = resp.text
-
-    # Remove BOM se vier
     if text.startswith("\ufeff"):
         text = text.lstrip("\ufeff")
-
     return pd.read_csv(StringIO(text))
 
 def carregar_limites_google(sheet_url: str, gid: str) -> dict:
@@ -285,7 +283,6 @@ def carregar_limites_google(sheet_url: str, gid: str) -> dict:
         df = carregar_csv_google_sem_cache(csv_url)
     except Exception:
         try:
-            # fallback simples
             df = pd.read_csv(csv_url)
         except Exception:
             return {}
@@ -301,11 +298,19 @@ def carregar_limites_google(sheet_url: str, gid: str) -> dict:
     col_ticket = None
 
     for c in df.columns:
-        if col_servidor is None and "servidor" in c:
+        # aceita variações de nome
+        if col_servidor is None and ("servidor" in c or "operacao" in c or "nome" in c):
             col_servidor = c
-        if col_valor is None and "valor" in c and "consum" in c:
+
+        if col_valor is None and (
+            ("valor" in c and "consum" in c) or
+            c in ["valor consumido", "limite valor", "valor"]
+        ):
             col_valor = c
-        if col_ticket is None and "ticket" in c:
+
+        if col_ticket is None and (
+            "ticket" in c or c in ["ticket medio", "limite ticket", "ticket"]
+        ):
             col_ticket = c
 
     if not col_servidor:
@@ -330,20 +335,69 @@ def carregar_limites_google(sheet_url: str, gid: str) -> dict:
 
 def get_limites_operacao(limites_dict: dict, titulo_operacao: str) -> dict:
     """
-    Busca limites com match exato e fallback normalizado.
+    Busca limites com:
+    1) match exato
+    2) match normalizado
+    3) aliases por operação (PBX/Vivo)
+    4) contenção flexível
     """
     if titulo_operacao in limites_dict:
         return limites_dict[titulo_operacao]
 
     alvo = normalize_text(titulo_operacao)
+
+    # 1) match normalizado exato
     for k, v in limites_dict.items():
         if normalize_text(k) == alvo:
             return v
 
-    # fallback flexível: aceita "PBX1" na planilha para "Operação PBX1"
+    # 2) aliases conhecidos
+    aliases = {
+        "operacao pbx total": ["pbx total", "operacao pbx total", "total pbx"],
+        "operacao pbx1": ["pbx1", "operacao pbx1"],
+        "operacao pbx2": ["pbx2", "operacao pbx2"],
+        "operacao pbx3": ["pbx3", "operacao pbx3"],
+        "operacao pbx4": ["pbx4", "operacao pbx4"],
+        "operacao pbx5": ["pbx5", "operacao pbx5"],
+
+        "operacao vivo total": ["vivo total", "operacao vivo total", "total vivo"],
+
+        "operacao soc (vivo)": ["soc", "soc vivo", "operacao soc", "operacao soc vivo"],
+        "operacao rpo (vivo)": ["rpo", "rpo vivo", "operacao rpo", "operacao rpo vivo"],
+        "operacao fmg (vivo)": ["fmg", "fmg vivo", "operacao fmg", "operacao fmg vivo"],
+        "operacao rpa (vivo)": ["rpa", "rpa vivo", "operacao rpa", "operacao rpa vivo"],
+    }
+
+    candidates = aliases.get(alvo, [alvo])
+
+    # índice normalizado da planilha
+    norm_map = {normalize_text(k): v for k, v in limites_dict.items()}
+
+    for cand in candidates:
+        if cand in norm_map:
+            return norm_map[cand]
+
+    # 3) simplificação
+    def simpl(s: str) -> str:
+        return (
+            normalize_text(s)
+            .replace("operacao ", "")
+            .replace("(vivo)", "")
+            .replace(" vivo", "")
+            .strip()
+        )
+
+    alvo_s = simpl(alvo)
+
+    for k, v in limites_dict.items():
+        nk_s = simpl(k)
+        if nk_s == alvo_s:
+            return v
+
+    # 4) contenção flexível
     for k, v in limites_dict.items():
         nk = normalize_text(k)
-        if nk and (nk in alvo or alvo in nk):
+        if any(c and (c in nk or nk in c) for c in candidates):
             return v
 
     return {}
@@ -580,7 +634,7 @@ metrics_pbx1 = get_metrics_pbx("operacao_pbx1", "pbx1")
 metrics_pbx2 = get_metrics_pbx("operacao_pbx2", "pbx2")
 metrics_pbx3 = get_metrics_pbx("operacao_pbx3", "pbx3")
 metrics_pbx4 = get_metrics_pbx("operacao_pbx4", "pbx4")
-metrics_pbx5 = get_metrics_pbx("operacao_pbx5", "pbx5")  # fora do total
+metrics_pbx5 = get_metrics_pbx("operacao_pbx5", "pbx5")  # ✅ fora do total
 
 # ==========================
 # COLETA DAS MÉTRICAS VIVO
@@ -595,11 +649,12 @@ metrics_rpa = get_metrics_pbx("operacao_rpa", "rpa")
 # ==========================
 quad_esq, quad_dir = st.columns(2)
 
+# ===== QUADRANTE ESQUERDO (PBX) =====
 with quad_esq:
     st.markdown('<div class="quad">', unsafe_allow_html=True)
     st.markdown('<div class="quad-title">QUADRANTE PBX</div>', unsafe_allow_html=True)
 
-    # PBX Total SOMENTE PBX1..PBX4
+    # ✅ PBX Total SOMENTE PBX1..PBX4
     render_secao_total(
         titulo="Operação PBX Total",
         subtitulo="Resumo consolidado das operações PBX1 a PBX4.",
@@ -614,12 +669,11 @@ with quad_esq:
     render_secao("Operação PBX2", "Indicadores dedicados à operação PBX2.", "operacao_pbx2", "pbx2", "#ffe9c7", LIMITES)
     render_secao("Operação PBX3", "Visão consolidada da operação PBX3.", "operacao_pbx3", "pbx3", "#fff1d7", LIMITES)
     render_secao("Operação PBX4", "Indicadores dedicados à operação PBX4.", "operacao_pbx4", "pbx4", "#fff7e6", LIMITES)
-
-    # PBX5 individual (fora do total)
     render_secao("Operação PBX5", "Indicadores dedicados à operação PBX5.", "operacao_pbx5", "pbx5", "#fffaf0", LIMITES)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+# ===== QUADRANTE DIREITO (VIVO) =====
 with quad_dir:
     st.markdown('<div class="quad">', unsafe_allow_html=True)
     st.markdown('<div class="quad-title">QUADRANTE VIVO</div>', unsafe_allow_html=True)
@@ -641,7 +695,7 @@ with quad_dir:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ✅ Debug rápido (pode deixar temporariamente para validar atualização)
+# ✅ Debug temporário (deixe ligado até validar tudo)
 with st.expander("Debug limites (Google Sheets)"):
     st.write("GID usado:", GOOGLE_SHEET_GID)
     st.write("Limites carregados agora:", LIMITES)
