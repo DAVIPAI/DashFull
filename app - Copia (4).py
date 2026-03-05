@@ -1,3 +1,4 @@
+
 import streamlit as st
 from supabase import create_client
 import pandas as pd
@@ -11,10 +12,6 @@ AUTO_REFRESH_MS = 120000  # 120s ou 2 minutos
 PAGE_TITLE = "📊 Painel Supervisório — Operações PBX & Vivo"
 
 # ========== CONEXÃO ==========
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Variáveis de ambiente SUPABASE_URL e/ou SUPABASE_KEY não definidas.")
-    st.stop()
-
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
@@ -143,35 +140,16 @@ def fmt_datetime_br(dt_str):
 
 @st.cache_data(ttl=50)
 def carregar_ultima_linha(tabela: str):
-    """
-    Busca a última linha da tabela.
-    Tenta por 'created_at'. Se falhar (ex.: typo de coluna), tenta 'creta_at'.
-    """
-    try:
-        resp = (
-            supabase
-            .table(tabela)
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        dados = resp.data or []
-        return dados[0] if len(dados) else None
-    except Exception:
-        try:
-            resp = (
-                supabase
-                .table(tabela)
-                .select("*")
-                .order("creta_at", desc=True)
-                .limit(1)
-                .execute()
-            )
-            dados = resp.data or []
-            return dados[0] if len(dados) else None
-        except Exception:
-            return None
+    resp = (
+        supabase
+        .table(tabela)
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    dados = resp.data or []
+    return dados[0] if len(dados) else None
 
 def get_metrics_pbx(tabela: str, sufixo: str):
     """
@@ -194,21 +172,15 @@ def get_metrics_pbx(tabela: str, sufixo: str):
         except Exception:
             return 0
 
-    status_campanhas = row.get(f"st_campanhas_{sufixo}")
-    qtde_mailing = _to_int(row.get(f"qtde_mailing_{sufixo}"))
-    ticket_medio = row.get(f"ticket_medio_{sufixo}")
-    ticket_medio_f = _to_float(ticket_medio) if ticket_medio is not None else None
-
-    # Compatibilidade: qtde_lead_x ou qtde_leads_x
-    qtde_leads_raw = row.get(f"qtde_lead_{sufixo}")
-    if qtde_leads_raw is None:
-        qtde_leads_raw = row.get(f"qtde_leads_{sufixo}")
-    qtde_leads = _to_int(qtde_leads_raw)
-
-    qtde_chamadas = _to_int(row.get(f"qtde_chamadas_{sufixo}"))
-    ultimo_lead = row.get(f"ultimo_lead_{sufixo}")
-    valor_consumido = _to_float(row.get(f"valor_consumido_{sufixo}"))
-    created_at = row.get("created_at") or row.get("creta_at")
+    status_campanhas   = row.get(f"st_campanhas_{sufixo}")
+    qtde_mailing       = _to_int(row.get(f"qtde_mailing_{sufixo}"))
+    ticket_medio       = row.get(f"ticket_medio_{sufixo}")
+    ticket_medio_f     = _to_float(ticket_medio) if ticket_medio is not None else None
+    qtde_leads         = _to_int(row.get(f"qtde_lead_{sufixo}"))
+    qtde_chamadas      = _to_int(row.get(f"qtde_chamadas_{sufixo}"))
+    ultimo_lead        = row.get(f"ultimo_lead_{sufixo}")
+    valor_consumido    = _to_float(row.get(f"valor_consumido_{sufixo}"))
+    created_at         = row.get("created_at")
 
     return {
         "status": status_campanhas,
@@ -429,13 +401,12 @@ def render_secao_total(
 
 
 # ==========================
-# COLETA DAS MÉTRICAS PBX (PBX1..PBX5)
+# COLETA DAS MÉTRICAS PBX (PBX1..PBX4)
 # ==========================
 metrics_pbx1 = get_metrics_pbx("operacao_pbx1", "pbx1")
 metrics_pbx2 = get_metrics_pbx("operacao_pbx2", "pbx2")
 metrics_pbx3 = get_metrics_pbx("operacao_pbx3", "pbx3")
 metrics_pbx4 = get_metrics_pbx("operacao_pbx4", "pbx4")
-metrics_pbx5 = get_metrics_pbx("operacao_pbx5", "pbx5")  # ✅ novo (fora do total)
 
 # ==========================
 # COLETA DAS MÉTRICAS VIVO
@@ -455,7 +426,6 @@ with quad_esq:
     st.markdown('<div class="quad">', unsafe_allow_html=True)
     st.markdown('<div class="quad-title">QUADRANTE PBX</div>', unsafe_allow_html=True)
 
-    # ✅ PBX Total continua SOMENTE PBX1..PBX4
     render_secao_total(
         titulo="Operação PBX Total",
         subtitulo="Resumo consolidado das operações PBX1 a PBX4.",
@@ -495,15 +465,6 @@ with quad_esq:
         tabela="operacao_pbx4",
         sufixo="pbx4",
         bg_color="#fff7e6",
-    )
-
-    # ✅ PBX5 adicionado como card individual (fora do total)
-    render_secao(
-        titulo="Operação PBX5",
-        subtitulo="Indicadores dedicados à operação PBX5.",
-        tabela="operacao_pbx5",
-        sufixo="pbx5",
-        bg_color="#fffaf0",
     )
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -558,3 +519,4 @@ with quad_dir:
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.caption("Atualização automática a cada 120 segundos (2 minutos).")
+
