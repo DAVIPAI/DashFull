@@ -5,6 +5,9 @@ import math
 import os
 import time
 from urllib.parse import urlparse
+import requests
+from io import StringIO
+import unicodedata
 
 # ========== CONFIG ==========
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -14,6 +17,10 @@ PAGE_TITLE = "📊 Painel Supervisório — Operações PBX & Vivo"
 
 # ✅ Planilha pública com limites (dinâmicos)
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1MrG40xIke5idxF-lIu-koeyL2oNyjTXMEtcqK3E2qps/edit?usp=sharing"
+
+# ✅ IMPORTANTE: se você editar outra aba, troque o gid abaixo
+# (gid=0 é a primeira aba)
+GOOGLE_SHEET_GID = os.getenv("GOOGLE_SHEET_GID", "0")
 
 # ========== CONEXÃO ==========
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -48,14 +55,12 @@ st.markdown(
         margin-bottom: 2px;
     }
 
-    /* ✅ Apenas para PBX Total (título maior) */
     .op-title-total {
         font-size: 24px;
         font-weight: 800;
         margin-bottom: 2px;
     }
 
-    /* ✅ Apenas para PBX Total (números maiores) */
     .pbx-total-metric [data-testid="stMetricValue"] {
         font-size: 1.35rem !important;
         font-weight: 800 !important;
@@ -76,7 +81,6 @@ st.markdown(
         font-weight: 600;
     }
 
-    /* “Quadrantes” (caixas grandes) */
     .quad {
         border-radius: 18px;
         padding: 14px 14px 2px 14px;
@@ -90,30 +94,48 @@ st.markdown(
         margin-bottom: 10px;
     }
 
-    /* Caixas customizadas */
+    /* ✅ Caixas customizadas com tamanho visual próximo ao st.metric */
     .kv-box {
-        border-radius:10px;
-        padding:6px 8px;
-        border:1px solid rgba(148,163,184,0.4);
-        background-color:rgba(255,255,255,0.75);
+        border-radius: 10px;
+        padding: 8px 10px;
+        border: 1px solid rgba(148,163,184,0.4);
+        background-color: rgba(255,255,255,0.75);
+        min-height: 72px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }
     .kv-box.warn {
-        background-color:#fef08a !important; /* amarelo */
-        border:1px solid #f59e0b !important;
+        background-color: #fef08a !important; /* amarelo */
+        border: 1px solid #f59e0b !important;
     }
     .kv-label {
-        font-size:11px;
-        color:#6b7280;
+        font-size: 0.80rem;
+        color: #6b7280;
+        line-height: 1.1;
+        margin-bottom: 4px;
     }
     .kv-value {
-        font-size:13px;
-        font-weight:600;
-        word-break:break-word;
+        font-size: 1.45rem;       /* ✅ maior */
+        font-weight: 700;
+        line-height: 1.05;
+        word-break: break-word;
+        color: rgb(49, 51, 63);
     }
     .kv-value-big {
-        font-size:14px;
-        font-weight:700;
-        word-break:break-word;
+        font-size: 1.45rem;       /* ✅ igual ao kv-value para ficar padrão */
+        font-weight: 700;
+        line-height: 1.05;
+        word-break: break-word;
+        color: rgb(49, 51, 63);
+    }
+
+    /* data/hora longa não precisa ficar gigante */
+    .kv-box.datetime .kv-value,
+    .kv-box.datetime .kv-value-big {
+        font-size: 0.95rem;
+        font-weight: 600;
+        line-height: 1.1;
     }
     </style>
     """,
@@ -153,11 +175,6 @@ def fmt_moeda_brl(x):
     return f"R$ {v}" if v != "-" else "-"
 
 def fmt_datetime_br(dt_str):
-    """
-    Converte para horário de São Paulo (UTC-3) e formata como dd/mm/aaaa HH:MM:SS.
-    - Se vier com timezone, converte para America/Sao_Paulo.
-    - Se vier sem timezone, assume que já está em America/Sao_Paulo.
-    """
     if dt_str is None or dt_str == "":
         return "-"
     try:
@@ -178,6 +195,9 @@ def to_float_safe(v):
             return None
         if isinstance(v, str):
             vv = v.strip().replace("R$", "").replace(" ", "")
+            if vv == "":
+                return None
+            # 1.234,56 -> 1234.56
             if "," in vv and "." in vv:
                 vv = vv.replace(".", "").replace(",", ".")
             elif "," in vv:
@@ -187,11 +207,21 @@ def to_float_safe(v):
     except Exception:
         return None
 
-def css_class_alert(is_alert: bool) -> str:
-    return "kv-box warn" if is_alert else "kv-box"
+def normalize_text(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
+    s = " ".join(s.split())
+    return s
 
-def render_kv_box(label: str, value_text: str, alert: bool = False, big: bool = False):
-    cls = css_class_alert(alert)
+def css_class_alert(is_alert: bool, extra_class: str = "") -> str:
+    base = "kv-box warn" if is_alert else "kv-box"
+    return f"{base} {extra_class}".strip()
+
+def render_kv_box(label: str, value_text: str, alert: bool = False, big: bool = False, is_datetime: bool = False):
+    extra = "datetime" if is_datetime else ""
+    cls = css_class_alert(alert, extra_class=extra)
     value_cls = "kv-value-big" if big else "kv-value"
     st.markdown(
         f"""
@@ -215,10 +245,6 @@ def extrair_sheet_id(url: str) -> str | None:
         return None
 
 def build_gsheet_csv_url(sheet_url: str, gid: str = "0", force_ts: bool = True) -> str | None:
-    """
-    Monta URL CSV da planilha pública.
-    force_ts=True adiciona parâmetro de timestamp para evitar cache intermediário.
-    """
     sheet_id = extrair_sheet_id(sheet_url)
     if not sheet_id:
         return None
@@ -227,42 +253,59 @@ def build_gsheet_csv_url(sheet_url: str, gid: str = "0", force_ts: bool = True) 
         url += f"&_ts={int(time.time())}"
     return url
 
-def carregar_limites_google(sheet_url: str) -> dict:
+def carregar_csv_google_sem_cache(csv_url: str) -> pd.DataFrame:
+    """
+    Faz download explícito com headers anti-cache (mais confiável que pd.read_csv direto na URL).
+    """
+    headers = {
+        "Cache-Control": "no-cache, no-store, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "User-Agent": "Mozilla/5.0"
+    }
+    resp = requests.get(csv_url, headers=headers, timeout=15)
+    resp.raise_for_status()
+    text = resp.text
+
+    # Remove BOM se vier
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")
+
+    return pd.read_csv(StringIO(text))
+
+def carregar_limites_google(sheet_url: str, gid: str) -> dict:
     """
     SEM CACHE (proposital): sempre busca os limites atuais da planilha.
-    Retorna dict:
-    {
-      "Operação PBX1": {"valor_consumido": 1000.0, "ticket": 2.5},
-      ...
-    }
     """
-    csv_url = build_gsheet_csv_url(sheet_url, gid="0", force_ts=True)
+    csv_url = build_gsheet_csv_url(sheet_url, gid=gid, force_ts=True)
     if not csv_url:
         return {}
 
     try:
-        df = pd.read_csv(csv_url)
+        df = carregar_csv_google_sem_cache(csv_url)
     except Exception:
-        return {}
+        try:
+            # fallback simples
+            df = pd.read_csv(csv_url)
+        except Exception:
+            return {}
 
     if df.empty:
         return {}
 
-    # Normaliza nomes de colunas
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    # normaliza colunas
+    df.columns = [normalize_text(c) for c in df.columns]
 
-    # Tenta localizar colunas esperadas
     col_servidor = None
     col_valor = None
     col_ticket = None
 
     for c in df.columns:
-        lc = str(c).lower()
-        if col_servidor is None and "servidor" in lc:
+        if col_servidor is None and "servidor" in c:
             col_servidor = c
-        if col_valor is None and "valor" in lc and "consum" in lc:
+        if col_valor is None and "valor" in c and "consum" in c:
             col_valor = c
-        if col_ticket is None and "ticket" in lc:
+        if col_ticket is None and "ticket" in c:
             col_ticket = c
 
     if not col_servidor:
@@ -270,7 +313,8 @@ def carregar_limites_google(sheet_url: str) -> dict:
 
     limites = {}
     for _, row in df.iterrows():
-        nome = str(row.get(col_servidor, "")).strip()
+        nome_original = row.get(col_servidor, "")
+        nome = str(nome_original).strip()
         if not nome or nome.lower() == "nan":
             continue
 
@@ -286,21 +330,30 @@ def carregar_limites_google(sheet_url: str) -> dict:
 
 def get_limites_operacao(limites_dict: dict, titulo_operacao: str) -> dict:
     """
-    Busca limites pelo título exibido do card, ex:
-    'Operação PBX1', 'Operação PBX Total', etc.
+    Busca limites com match exato e fallback normalizado.
     """
-    return limites_dict.get(titulo_operacao, {})
+    if titulo_operacao in limites_dict:
+        return limites_dict[titulo_operacao]
 
-# ✅ carrega limites SEMPRE no ciclo atual (sem cache)
-LIMITES = carregar_limites_google(GOOGLE_SHEET_URL)
+    alvo = normalize_text(titulo_operacao)
+    for k, v in limites_dict.items():
+        if normalize_text(k) == alvo:
+            return v
+
+    # fallback flexível: aceita "PBX1" na planilha para "Operação PBX1"
+    for k, v in limites_dict.items():
+        nk = normalize_text(k)
+        if nk and (nk in alvo or alvo in nk):
+            return v
+
+    return {}
+
+# ✅ sem cache: sempre lê na execução atual
+LIMITES = carregar_limites_google(GOOGLE_SHEET_URL, GOOGLE_SHEET_GID)
 
 # ========== DADOS SUPABASE ==========
 @st.cache_data(ttl=30)
 def carregar_ultima_linha(tabela: str):
-    """
-    Busca a última linha da tabela.
-    Tenta por 'created_at'. Se falhar (ex.: typo de coluna), tenta 'creta_at'.
-    """
     try:
         resp = (
             supabase
@@ -328,10 +381,6 @@ def carregar_ultima_linha(tabela: str):
             return None
 
 def get_metrics_pbx(tabela: str, sufixo: str):
-    """
-    Lê a última linha da tabela e devolve um dicionário pronto para uso
-    tanto nos cards individuais quanto nos consolidados.
-    """
     row = carregar_ultima_linha(tabela)
     if not row:
         return None
@@ -353,7 +402,6 @@ def get_metrics_pbx(tabela: str, sufixo: str):
     ticket_medio = row.get(f"ticket_medio_{sufixo}")
     ticket_medio_f = _to_float(ticket_medio) if ticket_medio is not None else None
 
-    # Compatibilidade: qtde_lead_x ou qtde_leads_x
     qtde_leads_raw = row.get(f"qtde_lead_{sufixo}")
     if qtde_leads_raw is None:
         qtde_leads_raw = row.get(f"qtde_leads_{sufixo}")
@@ -396,12 +444,8 @@ def render_secao(
     valor_atual_num = to_float_safe(m["valor_consumido"])
     ticket_atual_num = to_float_safe(m["ticket_medio"])
 
-    alerta_valor = (
-        limite_valor is not None and valor_atual_num is not None and valor_atual_num > limite_valor
-    )
-    alerta_ticket = (
-        limite_ticket is not None and ticket_atual_num is not None and ticket_atual_num > limite_ticket
-    )
+    alerta_valor = (limite_valor is not None and valor_atual_num is not None and valor_atual_num > limite_valor)
+    alerta_ticket = (limite_ticket is not None and ticket_atual_num is not None and ticket_atual_num > limite_ticket)
 
     m_status  = m["status"] if m["status"] else "-"
     m_mailing = fmt_int(m["qtde_mailing"])
@@ -412,20 +456,14 @@ def render_secao(
     m_ult     = fmt_datetime_br(m["ultimo_lead"])
     updated   = fmt_datetime_br(m["created_at"])
 
-    st.markdown(
-        f'<div class="op-card" style="background-color:{bg_color};">',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="op-card" style="background-color:{bg_color};">', unsafe_allow_html=True)
 
     col_top1, col_top2 = st.columns([2, 1])
     with col_top1:
         st.markdown(f'<div class="op-title">{titulo}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="op-subtitle">{subtitulo}</div>', unsafe_allow_html=True)
     with col_top2:
-        st.markdown(
-            f'<div class="op-updated">Atualizado em<br><span>{updated}</span></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="op-updated">Atualizado em<br><span>{updated}</span></div>', unsafe_allow_html=True)
 
     st.markdown("")
 
@@ -435,12 +473,7 @@ def render_secao(
     with linha1[1]:
         st.metric("Mailing (Qtde)", m_mailing)
     with linha1[2]:
-        # ✅ Ticket Médio customizado com alerta amarelo
-        render_kv_box(
-            label="Ticket Médio",
-            value_text=m_ticket,
-            alert=alerta_ticket
-        )
+        render_kv_box(label="Ticket Médio", value_text=m_ticket, alert=alerta_ticket)
 
     linha2 = st.columns(3)
     with linha2[0]:
@@ -448,20 +481,11 @@ def render_secao(
     with linha2[1]:
         st.metric("Chamadas (Qtde)", m_calls)
     with linha2[2]:
-        # ✅ Valor Consumido customizado com alerta amarelo
-        render_kv_box(
-            label="Valor Consumido",
-            value_text=m_valor,
-            alert=alerta_valor
-        )
+        render_kv_box(label="Valor Consumido", value_text=m_valor, alert=alerta_valor)
 
     linha3 = st.columns(3)
     with linha3[0]:
-        render_kv_box(
-            label="Último Lead (hora)",
-            value_text=m_ult,
-            alert=False
-        )
+        render_kv_box(label="Último Lead (hora)", value_text=m_ult, alert=False, is_datetime=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -484,11 +508,7 @@ def render_secao_total(
     total_chamadas  = sum(m["qtde_chamadas"] for m in valid)
     total_valor     = sum(m["valor_consumido"] for m in valid)
 
-    tickets = [
-        m["ticket_medio"]
-        for m in valid
-        if m["ticket_medio"] is not None and m["ticket_medio"] != 0
-    ]
+    tickets = [m["ticket_medio"] for m in valid if m["ticket_medio"] is not None and m["ticket_medio"] != 0]
     ticket_medio_med = sum(tickets) / len(tickets) if tickets else None
 
     ultimos_validos = [m["ultimo_lead"] for m in valid if m["ultimo_lead"]]
@@ -505,17 +525,12 @@ def render_secao_total(
     else:
         updated_str = "-"
 
-    # ✅ limites por título (ex.: "Operação PBX Total")
     limites = get_limites_operacao(limites_dict, titulo)
     limite_valor = to_float_safe(limites.get("valor_consumido"))
     limite_ticket = to_float_safe(limites.get("ticket"))
 
-    alerta_valor = (
-        limite_valor is not None and total_valor is not None and total_valor > limite_valor
-    )
-    alerta_ticket = (
-        limite_ticket is not None and ticket_medio_med is not None and ticket_medio_med > limite_ticket
-    )
+    alerta_valor = (limite_valor is not None and total_valor is not None and total_valor > limite_valor)
+    alerta_ticket = (limite_ticket is not None and ticket_medio_med is not None and ticket_medio_med > limite_ticket)
 
     m_mailing = fmt_int(total_mailing)
     m_ticket  = fmt_moeda_brl(ticket_medio_med)
@@ -526,20 +541,14 @@ def render_secao_total(
     if metric_wrapper_class:
         st.markdown(f'<div class="{metric_wrapper_class}">', unsafe_allow_html=True)
 
-    st.markdown(
-        f'<div class="op-card" style="background-color:{bg_color};">',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="op-card" style="background-color:{bg_color};">', unsafe_allow_html=True)
 
     col_top1, col_top2 = st.columns([2, 1])
     with col_top1:
         st.markdown(f'<div class="{title_class}">{titulo}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="op-subtitle">{subtitulo}</div>', unsafe_allow_html=True)
     with col_top2:
-        st.markdown(
-            f'<div class="op-updated">Atualizado em<br><span>{updated_str}</span></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="op-updated">Atualizado em<br><span>{updated_str}</span></div>', unsafe_allow_html=True)
 
     st.markdown("")
 
@@ -547,12 +556,7 @@ def render_secao_total(
     with linha1[0]:
         st.metric("Mailing Total", m_mailing)
     with linha1[1]:
-        render_kv_box(
-            label="Ticket Médio (média)",
-            value_text=m_ticket,
-            alert=alerta_ticket,
-            big=True
-        )
+        render_kv_box(label="Ticket Médio (média)", value_text=m_ticket, alert=alerta_ticket, big=True)
     with linha1[2]:
         st.metric("Leads Totais", m_leads)
 
@@ -560,18 +564,9 @@ def render_secao_total(
     with linha2[0]:
         st.metric("Chamadas Totais", m_calls)
     with linha2[1]:
-        render_kv_box(
-            label="Valor Consumido Total",
-            value_text=m_valor,
-            alert=alerta_valor,
-            big=True
-        )
+        render_kv_box(label="Valor Consumido Total", value_text=m_valor, alert=alerta_valor, big=True)
     with linha2[2]:
-        render_kv_box(
-            label="Último Lead (mais recente)",
-            value_text=ultimo_global_str,
-            alert=False
-        )
+        render_kv_box(label="Último Lead (mais recente)", value_text=ultimo_global_str, alert=False, is_datetime=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -585,7 +580,7 @@ metrics_pbx1 = get_metrics_pbx("operacao_pbx1", "pbx1")
 metrics_pbx2 = get_metrics_pbx("operacao_pbx2", "pbx2")
 metrics_pbx3 = get_metrics_pbx("operacao_pbx3", "pbx3")
 metrics_pbx4 = get_metrics_pbx("operacao_pbx4", "pbx4")
-metrics_pbx5 = get_metrics_pbx("operacao_pbx5", "pbx5")  # ✅ fora do total
+metrics_pbx5 = get_metrics_pbx("operacao_pbx5", "pbx5")  # fora do total
 
 # ==========================
 # COLETA DAS MÉTRICAS VIVO
@@ -600,12 +595,11 @@ metrics_rpa = get_metrics_pbx("operacao_rpa", "rpa")
 # ==========================
 quad_esq, quad_dir = st.columns(2)
 
-# ===== QUADRANTE ESQUERDO (PBX) =====
 with quad_esq:
     st.markdown('<div class="quad">', unsafe_allow_html=True)
     st.markdown('<div class="quad-title">QUADRANTE PBX</div>', unsafe_allow_html=True)
 
-    # ✅ PBX Total continua SOMENTE PBX1..PBX4
+    # PBX Total SOMENTE PBX1..PBX4
     render_secao_total(
         titulo="Operação PBX Total",
         subtitulo="Resumo consolidado das operações PBX1 a PBX4.",
@@ -616,55 +610,16 @@ with quad_esq:
         metric_wrapper_class="pbx-total-metric",
     )
 
-    render_secao(
-        titulo="Operação PBX1",
-        subtitulo="Monitoramento em tempo quase real — PBX1.",
-        tabela="operacao_pbx1",
-        sufixo="pbx1",
-        bg_color="#ffe0b8",
-        limites_dict=LIMITES,
-    )
+    render_secao("Operação PBX1", "Monitoramento em tempo quase real — PBX1.", "operacao_pbx1", "pbx1", "#ffe0b8", LIMITES)
+    render_secao("Operação PBX2", "Indicadores dedicados à operação PBX2.", "operacao_pbx2", "pbx2", "#ffe9c7", LIMITES)
+    render_secao("Operação PBX3", "Visão consolidada da operação PBX3.", "operacao_pbx3", "pbx3", "#fff1d7", LIMITES)
+    render_secao("Operação PBX4", "Indicadores dedicados à operação PBX4.", "operacao_pbx4", "pbx4", "#fff7e6", LIMITES)
 
-    render_secao(
-        titulo="Operação PBX2",
-        subtitulo="Indicadores dedicados à operação PBX2.",
-        tabela="operacao_pbx2",
-        sufixo="pbx2",
-        bg_color="#ffe9c7",
-        limites_dict=LIMITES,
-    )
-
-    render_secao(
-        titulo="Operação PBX3",
-        subtitulo="Visão consolidada da operação PBX3.",
-        tabela="operacao_pbx3",
-        sufixo="pbx3",
-        bg_color="#fff1d7",
-        limites_dict=LIMITES,
-    )
-
-    render_secao(
-        titulo="Operação PBX4",
-        subtitulo="Indicadores dedicados à operação PBX4.",
-        tabela="operacao_pbx4",
-        sufixo="pbx4",
-        bg_color="#fff7e6",
-        limites_dict=LIMITES,
-    )
-
-    # ✅ PBX5 adicionado como card individual (fora do total)
-    render_secao(
-        titulo="Operação PBX5",
-        subtitulo="Indicadores dedicados à operação PBX5.",
-        tabela="operacao_pbx5",
-        sufixo="pbx5",
-        bg_color="#fffaf0",
-        limites_dict=LIMITES,
-    )
+    # PBX5 individual (fora do total)
+    render_secao("Operação PBX5", "Indicadores dedicados à operação PBX5.", "operacao_pbx5", "pbx5", "#fffaf0", LIMITES)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ===== QUADRANTE DIREITO (VIVO) =====
 with quad_dir:
     st.markdown('<div class="quad">', unsafe_allow_html=True)
     st.markdown('<div class="quad-title">QUADRANTE VIVO</div>', unsafe_allow_html=True)
@@ -679,46 +634,16 @@ with quad_dir:
         metric_wrapper_class=None,
     )
 
-    render_secao(
-        titulo="Operação SOC (Vivo)",
-        subtitulo="Indicadores da operação Vivo — SOC.",
-        tabela="operacao_soc",
-        sufixo="soc",
-        bg_color="#e0d4ff",
-        limites_dict=LIMITES,
-    )
-
-    render_secao(
-        titulo="Operação RPO (Vivo)",
-        subtitulo="Indicadores da operação Vivo — RPO.",
-        tabela="operacao_rpo",
-        sufixo="rpo",
-        bg_color="#e9ddff",
-        limites_dict=LIMITES,
-    )
-
-    render_secao(
-        titulo="Operação FMG (Vivo)",
-        subtitulo="Indicadores da operação Vivo — FMG.",
-        tabela="operacao_fmg",
-        sufixo="fmg",
-        bg_color="#f3eaff",
-        limites_dict=LIMITES,
-    )
-
-    render_secao(
-        titulo="Operação RPA (Vivo)",
-        subtitulo="Indicadores da operação Vivo — RPA.",
-        tabela="operacao_rpa",
-        sufixo="rpa",
-        bg_color="#f3eaff",
-        limites_dict=LIMITES,
-    )
+    render_secao("Operação SOC (Vivo)", "Indicadores da operação Vivo — SOC.", "operacao_soc", "soc", "#e0d4ff", LIMITES)
+    render_secao("Operação RPO (Vivo)", "Indicadores da operação Vivo — RPO.", "operacao_rpo", "rpo", "#e9ddff", LIMITES)
+    render_secao("Operação FMG (Vivo)", "Indicadores da operação Vivo — FMG.", "operacao_fmg", "fmg", "#f3eaff", LIMITES)
+    render_secao("Operação RPA (Vivo)", "Indicadores da operação Vivo — RPA.", "operacao_rpa", "rpa", "#f3eaff", LIMITES)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# Debug opcional
-# with st.expander("Debug limites (Google Sheets)"):
-#     st.write(LIMITES)
+# ✅ Debug rápido (pode deixar temporariamente para validar atualização)
+with st.expander("Debug limites (Google Sheets)"):
+    st.write("GID usado:", GOOGLE_SHEET_GID)
+    st.write("Limites carregados agora:", LIMITES)
 
 st.caption("Atualização automática a cada 120 segundos (2 minutos).")
